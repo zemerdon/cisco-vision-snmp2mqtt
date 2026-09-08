@@ -19,6 +19,9 @@ import {
   IF_NAME_OID,
   interfaceCandidates,
   interfaceOid,
+  interfaceWatchLookup,
+  isJuniperEx3300UplinkCandidates,
+  observeInterfaceWatch,
   resolveInterfaceIndex,
 } from "./interface"
 import { SnmpTable, walkTable } from "./snmp_table"
@@ -264,7 +267,113 @@ export class Target extends EventEmitter {
         }
       }
 
+      const exactEx3300 =
+        this.options.device_model === "Juniper EX3300-48P"
+      const watchedInterfaceIndexes = new Set<number>()
+
       if (interfaceSensors.length && ifNames) {
+        const watcherRequests: Array<{
+          sensor: SensorConfig
+          index: number
+          candidates: string[]
+          resolved: { name: string; ifIndex: number }
+          oid: string
+        }> = []
+
+        if (exactEx3300) {
+          for (const { sensor, index } of interfaceSensors) {
+            const candidates = interfaceCandidates(sensor)
+            if (
+              sensor.attribute !== "oper_status" ||
+              !isJuniperEx3300UplinkCandidates(candidates)
+            ) {
+              continue
+            }
+
+            watchedInterfaceIndexes.add(index)
+            const resolved = resolveInterfaceIndex(ifNames, candidates)
+            if (!resolved) {
+              observeInterfaceWatch(
+                this.options.host,
+                candidates,
+                null,
+                this.options.scan_interval ?? 10,
+              )
+              const lookup = interfaceWatchLookup(
+                this.options.host,
+                candidates,
+              )
+              values[index] = new SensorUnavailableError(
+                `EX3300 uplink watcher ${lookup.status}: ${candidates.join(" or ")}`,
+              )
+              continue
+            }
+
+            watcherRequests.push({
+              sensor,
+              index,
+              candidates,
+              resolved,
+              oid: interfaceOid("oper_status", resolved.ifIndex),
+            })
+          }
+        }
+
+        if (watcherRequests.length) {
+          try {
+            const varbinds = await this.getOids(
+              watcherRequests.map((request) => request.oid),
+            )
+
+            for (
+              let position = 0;
+              position < watcherRequests.length;
+              position++
+            ) {
+              const { sensor, index, candidates, resolved } =
+                watcherRequests[position]
+              const observed = this.decodeVarbind(
+                varbinds[position],
+                sensor,
+              )
+              if (observed instanceof Error) {
+                values[index] = observed
+                continue
+              }
+
+              observeInterfaceWatch(
+                this.options.host,
+                candidates,
+                {
+                  name: resolved.name,
+                  ifIndex: resolved.ifIndex,
+                  operStatus: observed,
+                },
+                this.options.scan_interval ?? 10,
+              )
+              const lookup = interfaceWatchLookup(
+                this.options.host,
+                candidates,
+              )
+              if (
+                (lookup.status === "ready" ||
+                  lookup.status === "pending_state") &&
+                lookup.operStatus !== undefined
+              ) {
+                values[index] = lookup.operStatus
+              } else {
+                values[index] = new SensorUnavailableError(
+                  `EX3300 uplink watcher ${lookup.status}: ${candidates.join(" or ")}`,
+                )
+              }
+            }
+          } catch (error) {
+            const failure =
+              error instanceof Error ? error : new Error(String(error))
+            for (const { index } of watcherRequests) values[index] = failure
+          }
+        }
+
         const requests: Array<{
           sensor: SensorConfig
           index: number
@@ -272,8 +381,34 @@ export class Target extends EventEmitter {
         }> = []
 
         for (const { sensor, index } of interfaceSensors) {
+          if (watchedInterfaceIndexes.has(index)) continue
+
           const candidates = interfaceCandidates(sensor)
-          const resolved = resolveInterfaceIndex(ifNames, candidates)
+          let resolved: { name: string; ifIndex: number } | undefined
+
+          if (
+            exactEx3300 &&
+            isJuniperEx3300UplinkCandidates(candidates)
+          ) {
+            const lookup = interfaceWatchLookup(
+              this.options.host,
+              candidates,
+            )
+            if (
+              (lookup.status === "ready" ||
+                lookup.status === "pending_state") &&
+              lookup.resolved
+            ) {
+              resolved = lookup.resolved
+            } else {
+              values[index] = new SensorUnavailableError(
+                `EX3300 uplink watcher ${lookup.status}: ${candidates.join(" or ")}`,
+              )
+              continue
+            }
+          } else {
+            resolved = resolveInterfaceIndex(ifNames, candidates)
+          }
 
           if (!resolved) {
             values[index] = new SensorUnavailableError(
@@ -311,44 +446,93 @@ export class Target extends EventEmitter {
       }
 
       if (juniperSensors.length && ifNames) {
-        try {
-          const states = await collectJuniperVlanPortStates(
-            this.session,
-            ifNames,
-          )
+        const pendingJuniper: Array<{
+          sensor: SensorConfig
+          index: number
+          candidates: string[]
+          watchedName?: string
+        }> = []
 
-          for (const { sensor, index } of juniperSensors) {
-            const candidates = interfaceCandidates(sensor)
-            let state
-            let resolvedName = ""
-
-            for (const candidate of candidates) {
-              state = states.get(candidate)
-              if (state) {
-                resolvedName = candidate
-                break
-              }
-            }
-
-            if (!state) {
+        for (const { sensor, index } of juniperSensors) {
+          const candidates = interfaceCandidates(sensor)
+          if (
+            exactEx3300 &&
+            isJuniperEx3300UplinkCandidates(candidates)
+          ) {
+            const lookup = interfaceWatchLookup(
+              this.options.host,
+              candidates,
+            )
+            if (
+              (lookup.status === "ready" ||
+                lookup.status === "pending_state") &&
+              lookup.resolved
+            ) {
+              pendingJuniper.push({
+                sensor,
+                index,
+                candidates,
+                watchedName: lookup.resolved.name,
+              })
+            } else {
               values[index] = new SensorUnavailableError(
-                `Juniper VLAN data not currently available for interface ${candidates.join(" or ")}`,
+                `EX3300 uplink watcher ${lookup.status}: ${candidates.join(" or ")}`,
               )
-              continue
             }
-
-            this.log.debug(
-              `Resolved Juniper VLAN sensor ${sensor.name} through ${resolvedName}`,
-            )
-            values[index] = juniperVlanAttributeValue(
-              state,
-              sensor.attribute as any,
-            )
+          } else {
+            pendingJuniper.push({ sensor, index, candidates })
           }
-        } catch (error) {
-          const failure =
-            error instanceof Error ? error : new Error(String(error))
-          for (const { index } of juniperSensors) values[index] = failure
+        }
+
+        if (pendingJuniper.length) {
+          try {
+            const states = await collectJuniperVlanPortStates(
+              this.session,
+              ifNames,
+            )
+
+            for (const {
+              sensor,
+              index,
+              candidates,
+              watchedName,
+            } of pendingJuniper) {
+              let state
+              let resolvedName = ""
+
+              if (watchedName) {
+                state = states.get(watchedName)
+                resolvedName = watchedName
+              } else {
+                for (const candidate of candidates) {
+                  state = states.get(candidate)
+                  if (state) {
+                    resolvedName = candidate
+                    break
+                  }
+                }
+              }
+
+              if (!state) {
+                values[index] = new SensorUnavailableError(
+                  `Juniper VLAN data not currently available for interface ${candidates.join(" or ")}`,
+                )
+                continue
+              }
+
+              this.log.debug(
+                `Resolved Juniper VLAN sensor ${sensor.name} through ${resolvedName}`,
+              )
+              values[index] = juniperVlanAttributeValue(
+                state,
+                sensor.attribute as any,
+              )
+            }
+          } catch (error) {
+            const failure =
+              error instanceof Error ? error : new Error(String(error))
+            for (const { index } of pendingJuniper) values[index] = failure
+          }
         }
       }
 
