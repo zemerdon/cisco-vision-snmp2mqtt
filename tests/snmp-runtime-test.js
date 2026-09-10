@@ -465,7 +465,7 @@ async function main() {
   await testEx3300ResumeAfterConfirmation()
   await testNonEx3300Compatibility()
   console.log(
-    "Switch Vision SNMP2MQTT Core v0.9.13 SNMP runtime regression: PASS",
+    "Switch Vision SNMP2MQTT Core v1.0.0 SNMP runtime regression: PASS",
   )
 }
 

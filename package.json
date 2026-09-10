@@ -1,6 +1,6 @@
 {
   "name": "switch-vision-snmp2mqtt",
-  "version": "0.9.13",
+  "version": "1.0.0",
   "description": "Switch Vision SNMP2MQTT bridge for Home Assistant",
   "license": "MIT",
   "bin": {
