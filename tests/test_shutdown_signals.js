@@ -14,8 +14,8 @@ function requireText(needle, label) {
   }
 }
 
-if (pkg.version !== "0.9.13") {
-  throw new Error(`Expected package version 0.9.13, found ${pkg.version}`)
+if (pkg.version !== "1.0.0") {
+  throw new Error(`Expected package version 1.0.0, found ${pkg.version}`)
 }
 
 requireText(
@@ -70,5 +70,5 @@ if (sigtermHandlers !== 1) {
 }
 
 console.log(
-  "Switch Vision SNMP2MQTT Core v0.9.13 shutdown-signal regression: PASS",
+  "Switch Vision SNMP2MQTT Core v1.0.0 shutdown-signal regression: PASS",
 )

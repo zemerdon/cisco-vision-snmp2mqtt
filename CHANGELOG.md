@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0 — Dynamic EX3300 uplink state and stable release contract
+
+- Add shared candidate identity/state debounce for Juniper EX3300 dual-personality uplinks so GE/XE transitions do not flap inventory or publish transient stale identities.
+- Suppress pending/stale dynamic interface observations until the new candidate is stable, then resume normal live IF-MIB polling without requiring generated-YAML regeneration.
+- Preserve existing SNMP polling, MQTT queue/reconnect/shutdown behavior, safe transforms, Home Assistant discovery, live ifIndex resolution, and supported platform builds.
+- Carry the current dependency/CI maintenance already merged to main and promote the engine to the stable 1.0.0 release line for coordinated use by Switch Vision SNMP2MQTT HA app 1.0.0.
+
 ## v0.9.13 — Node 20 type-definition alignment
 
 - Align `@types/node` with the existing Node 20 TypeScript target by replacing the legacy Node 14 definitions with exact version `20.19.43`.
